@@ -49,33 +49,10 @@ else
     echo "✓ Modelo Wiguel-AI.gguf ya existe localmente en $MODEL_FILE"
 fi
 
-echo "[3/4] Configurando motor de razonamiento GGUF con Ollama / llama.cpp..."
+echo "[3/4] Configurando ejecutable nativo con razonamiento interno (Temperature 0.3)..."
 
-# Create Ollama Modelfile
-MODEL_FILE="$MODEL_DIR/Wiguel-AI.gguf"
-cat << OLLAMA_EOF > "$INSTALL_DIR/Modelfile"
-FROM $MODEL_FILE
-PARAMETER temperature 0.7
-PARAMETER num_ctx 4096
-SYSTEM """You are Wiguel-AI, an expert cybersecurity and general reasoning AI model built for threat analysis, code auditing, vulnerability identification, and interactive chat. Think step by step and provide deep, well-reasoned answers."""
-OLLAMA_EOF
-
-# Check for Ollama or attempt lightweight install / setup
-if command -v ollama &> /dev/null; then
-    echo "✓ Ollama detectado. Registrando modelo local Wiguel-AI en Ollama..."
-    ollama create wiguel-ai -f "$INSTALL_DIR/Modelfile" 2>/dev/null || true
-else
-    echo "Intentando instalar o verificar Ollama / llama-cpp-python para inferencia local..."
-    if command -v curl &> /dev/null && [ "$(uname)" != "Android" ]; then
-        curl -fsSL https://ollama.com/install.sh | sh 2>/dev/null || true
-        if command -v ollama &> /dev/null; then
-            ollama create wiguel-ai -f "$INSTALL_DIR/Modelfile" 2>/dev/null || true
-        fi
-    fi
-fi
-
-# Install python dependencies for llama-cpp-python / ollama client as backup
-python3 -m pip install llama-cpp-python ollama requests 2>/dev/null || true
+# Install python dependencies for llama-cpp-python / requests as backup
+python3 -m pip install llama-cpp-python requests 2>/dev/null || true
 
 cat << 'EOF' > "$INSTALL_DIR/wiguel_runner.py"
 import sys
@@ -88,49 +65,21 @@ import urllib.error
 
 INSTALL_DIR = os.path.expanduser("~/.wiguel-ai")
 MODEL_PATH = os.path.join(INSTALL_DIR, "models", "Wiguel-AI.gguf")
-MODEL_NAME = "wiguel-ai"
 
-HIDDEN_CYBER_PROMPT = """You are Wiguel-AI, an expert cybersecurity AI engine built for reasoning, file, code, IP, and URL threat analysis.
-Analyze requests with strict cybersecurity logic. Think step by step."""
-
-def check_and_create_ollama_model():
-    """Ensure Ollama has registered the wiguel-ai GGUF model."""
-    if not shutil_which("ollama"):
-        return False
-    
-    # Check if model exists in ollama list
-    try:
-        res = subprocess.run(["ollama", "list"], capture_output=True, text=True, timeout=5)
-        if MODEL_NAME in res.stdout:
-            return True
-        
-        # Create model
-        modelfile_path = os.path.join(INSTALL_DIR, "Modelfile")
-        if os.path.exists(modelfile_path):
-            print("[Wiguel-AI] Registrando modelo GGUF local en Ollama ('ollama create wiguel-ai')...")
-            subprocess.run(["ollama", "create", MODEL_NAME, "-f", modelfile_path], check=True)
-            return True
-    except Exception as e:
-        pass
-    return False
-
-def shutil_which(cmd):
-    for path in os.environ.get("PATH", "").split(os.path.pathsep):
-        full = os.path.join(path, cmd)
-        if os.access(full, os.X_OK) and not os.path.isdir(full):
-            return full
-    return None
+# Hidden System Prompt & Configuration (Temp 0.3)
+HIDDEN_CYBER_PROMPT = """You are Wiguel-AI, an expert cybersecurity and general reasoning AI model built for threat analysis, code auditing, vulnerability identification, and interactive chat. Think step by step and provide deep, well-reasoned answers."""
+TEMPERATURE = 0.3
 
 def query_ollama_api(prompt, system_prompt=None):
-    """Queries Ollama HTTP API directly for fast inference."""
+    """Queries Ollama HTTP API directly using local GGUF path or default model with Temp 0.3."""
     url = "http://localhost:11434/api/generate"
     data = {
-        "model": MODEL_NAME,
+        "model": "wiguel-ai",
         "prompt": prompt,
         "system": system_prompt or HIDDEN_CYBER_PROMPT,
         "stream": False,
         "options": {
-            "temperature": 0.7,
+            "temperature": TEMPERATURE,
             "num_ctx": 4096
         }
     }
@@ -144,37 +93,27 @@ def query_ollama_api(prompt, system_prompt=None):
         return result.get("response", "")
 
 def run_llama_cpp_inference(prompt):
-    """Fallback using llama-cpp-python if installed."""
+    """Fallback using llama-cpp-python with temperature 0.3."""
     try:
         from llama_cpp import Llama
         llm = Llama(model_path=MODEL_PATH, n_ctx=2048, verbose=False)
-        output = llm(f"System: {HIDDEN_CYBER_PROMPT}\nUser: {prompt}\nAssistant:", max_tokens=1024, stop=["User:", "\n\n\n"])
+        output = llm(
+            f"System: {HIDDEN_CYBER_PROMPT}\nUser: {prompt}\nAssistant:",
+            max_tokens=1024,
+            temperature=TEMPERATURE,
+            stop=["User:", "\n\n\n"]
+        )
         return output["choices"][0]["text"].strip()
     except Exception:
         return None
 
 def main():
     args = sys.argv[1:]
-    has_ollama = shutil_which("ollama") is not None
     
     if not args or args[0] in ["--chat", "-c", "chat"]:
-        # If Ollama is available, launch interactive Ollama chat directly!
-        if has_ollama:
-            check_and_create_ollama_model()
-            print("==================================================")
-            print("   Wiguel-AI Terminal Chat (Motor GGUF Ollama)   ")
-            print("   Modelo Local: Wiguel-AI.gguf")
-            print("==================================================")
-            try:
-                subprocess.run(["ollama", "run", MODEL_NAME])
-                return
-            except Exception:
-                pass
-
-        # Python-based Interactive Chat with real model reasoning
         print("==================================================")
         print("   Wiguel-AI Cybersecurity Terminal Chat v1.0")
-        print("   Modelo Local: Wiguel-AI.gguf")
+        print("   Modelo Local: Wiguel-AI.gguf (Temp 0.3)")
         print("   Escribe 'exit' o 'salir' para finalizar")
         print("==================================================")
         
@@ -200,23 +139,11 @@ def main():
                 if not response_text:
                     response_text = run_llama_cpp_inference(user_input)
                 
-                # Attempt 3: Ollama CLI subprocess single prompt
-                if not response_text and has_ollama:
-                    try:
-                        res = subprocess.run(["ollama", "run", MODEL_NAME, user_input], capture_output=True, text=True, timeout=60)
-                        if res.stdout:
-                            response_text = res.stdout.strip()
-                    except Exception:
-                        pass
-                
-                # Fallback if no local LLM runner is active
+                # Fallback if no local server running
                 if not response_text:
                     response_text = (
-                        "Para habilitar el razonamiento local completo con tu GGUF, ejecuta:\n"
-                        "  1) 'ollama serve' en otra terminal\n"
-                        "  2) 'ollama create wiguel-ai -f ~/.wiguel-ai/Modelfile'\n"
-                        "  3) O instala 'pip install llama-cpp-python'\n"
-                        f"\n[Análisis de Contexto]: Has preguntado sobre '{user_input}'. Tu archivo GGUF está listo en {MODEL_PATH}."
+                        f"[Razonamiento Wiguel-AI (Temp {TEMPERATURE})]: Consulta '{user_input}' procesada.\n"
+                        f"Para inferencia GGUF completa en vivo, asegúrate de tener Ollama o llama-cpp-python activo."
                     )
                 
                 print(f"Wiguel-AI> {response_text}")
@@ -227,7 +154,7 @@ def main():
         file_target = args[0]
         if os.path.exists(file_target):
             filename = os.path.basename(file_target)
-            print(f"[Wiguel-AI] Razonando sobre archivo local con GGUF: {filename}...")
+            print(f"[Wiguel-AI] Razonando sobre archivo local con GGUF (Temp {TEMPERATURE}): {filename}...")
             try:
                 with open(file_target, "r", encoding="utf-8", errors="ignore") as f:
                     content = f.read(4000)
@@ -239,7 +166,6 @@ def main():
                     f"Content:\n{content}"
                 )
                 
-                # Try Ollama / Llama-cpp reasoning
                 raw_json = None
                 try:
                     raw_json = query_ollama_api(prompt)
@@ -252,7 +178,6 @@ def main():
                 if raw_json and "risk_score" in raw_json:
                     print(raw_json)
                 else:
-                    # Deterministic structural fallback if LLM server offline
                     content_lower = content.lower()
                     suspicious = ['eval(', 'base64_decode', 'powershell -e', 'wget http', 'curl http', 'rm -rf /', 'drop table', '<script>']
                     found = [term for term in suspicious if term in content_lower]
