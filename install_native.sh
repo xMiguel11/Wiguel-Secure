@@ -18,23 +18,32 @@ MODEL_DIR="$INSTALL_DIR/models"
 mkdir -p "$BIN_DIR"
 mkdir -p "$MODEL_DIR"
 
-echo "[1/4] Verificando entorno Python3 y Curl..."
-if ! command -v python3 &> /dev/null; then
-    echo "Instalando python3..."
+echo "[1/4] Verificando entorno Python3, Curl y Acelerador Multihilo (aria2c)..."
+if ! command -v python3 &> /dev/null || ! command -v aria2c &> /dev/null; then
+    echo "Instalando dependencias recomendadas para descarga acelerada..."
     if command -v pkg &> /dev/null; then
-        pkg update && pkg install -y python python-pip curl
+        pkg update && pkg install -y python python-pip curl aria2 || true
     elif command -v apt-get &> /dev/null; then
-        sudo apt-get update && sudo apt-get install -y python3 python3-pip curl
+        sudo apt-get update && sudo apt-get install -y python3 python3-pip curl aria2 || true
     elif command -v brew &> /dev/null; then
-        brew install python curl
+        brew install python curl aria2 || true
     fi
 fi
 
-echo "[2/4] Descargando modelo Wiguel-AI.gguf desde Hugging Face..."
+echo "[2/4] Descargando modelo Wiguel-AI.gguf desde Hugging Face (Modo Acelerado Multi-hilo)..."
 MODEL_FILE="$MODEL_DIR/Wiguel-AI.gguf"
 if [ ! -f "$MODEL_FILE" ]; then
     echo "URL: $MODEL_URL"
-    curl -L "$MODEL_URL" -o "$MODEL_FILE" --progress-bar
+    if command -v aria2c &> /dev/null; then
+        echo "🚀 Ejecutando motor aria2c multihilo (16 conexiones en paralelo)..."
+        aria2c -x 16 -s 16 -k 1M -d "$MODEL_DIR" -o "Wiguel-AI.gguf" "$MODEL_URL" || {
+            echo "Aria2c falló, reintentando con curl..."
+            curl -L -C - --retry 3 "$MODEL_URL" -o "$MODEL_FILE" --progress-bar
+        }
+    else
+        echo "⚡ Usando curl con reintentos..."
+        curl -L -C - --retry 3 "$MODEL_URL" -o "$MODEL_FILE" --progress-bar
+    fi
     echo "✓ Modelo descargado con éxito en $MODEL_FILE"
 else
     echo "✓ Modelo Wiguel-AI.gguf ya existe localmente en $MODEL_FILE"
